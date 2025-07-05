@@ -43,8 +43,10 @@ class LLMEngine:
         if isinstance(prompt, dict):
             if "prompt" in prompt:
                 token_ids = self.tokenizer.encode(prompt["prompt"])
-            else:
+            elif "prompt_token_ids" in prompt:
                 token_ids = prompt["prompt_token_ids"]
+            else:
+                raise ValueError("Prompt must contain either 'prompt' or 'prompt_token_ids' key.")
             input_embeds = prompt.get("prompt_embeds")
             position_ids = prompt.get("position_ids")
             token_hashes = prompt.get("token_hashes")

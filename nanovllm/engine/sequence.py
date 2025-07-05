@@ -21,7 +21,7 @@ class Sequence:
         token_ids: list[int],
         sampling_params: SamplingParams = SamplingParams(),
         input_embeds: torch.Tensor | None = None,
-        position_ids: torch.Tensor | None = None,
+        position_ids: torch.Tensor | list[int] | list[list[int]] | None = None,
         token_hashes: list[int] | None = None,
     ):
         self.seq_id = next(Sequence.counter)
@@ -36,11 +36,9 @@ class Sequence:
         self.max_tokens = sampling_params.max_tokens
         self.ignore_eos = sampling_params.ignore_eos
         self.input_embeds = input_embeds
-        if position_ids is None:
-            self.position_ids = torch.arange(len(token_ids), dtype=torch.int64)
-        else:
+        if position_ids is not None:
             if not torch.is_tensor(position_ids):
-                position_ids = torch.tensor(position_ids, dtype=torch.int64)
+                position_ids = torch.tensor(position_ids, dtype=torch.int64, device="cpu")
             self.position_ids = position_ids
         self.token_hashes = [] if token_hashes is None else list(token_hashes)
 

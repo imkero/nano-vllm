@@ -200,6 +200,7 @@ class Qwen2ForCausalLM(nn.Module):
 
     def get_next_position_id(self, position_ids, seq_length: int):
         if self.uses_mrope:
+            # mrope 计算下一文本 token 位置只需取前一 token 所有维度的最大坐标 + 1
             mrope_position_delta = position_ids[-1].max().item() - len(position_ids) + 1
             next_pos = mrope_position_delta + seq_length - 1
             return torch.tensor([next_pos, next_pos, next_pos], device="cpu", dtype=torch.int64)
