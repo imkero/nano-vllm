@@ -21,6 +21,10 @@ If you prefer to download the model weights manually, use the following command:
 huggingface-cli download --resume-download Qwen/Qwen3-0.6B \
   --local-dir ~/huggingface/Qwen3-0.6B/ \
   --local-dir-use-symlinks False
+# Or download Qwen2 weights similarly
+# huggingface-cli download --resume-download Qwen/Qwen2-0.5B \
+#   --local-dir ~/huggingface/Qwen2-0.5B/ \
+#   --local-dir-use-symlinks False
 ```
 
 ## Quick Start
@@ -39,9 +43,9 @@ outputs[0]["text"]
 
 See `bench.py` for benchmark.
 
-**Test Configuration:**
+-**Test Configuration:**
 - Hardware: RTX 4070 Laptop (8GB)
-- Model: Qwen3-0.6B
+- Model: Qwen3-0.6B (Qwen2 models are also supported)
 - Total Requests: 256 sequences
 - Input Length: Randomly sampled between 100–1024 tokens
 - Output Length: Randomly sampled between 100–1024 tokens
