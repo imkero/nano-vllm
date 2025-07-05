@@ -151,21 +151,21 @@ class ModelRunner:
         if all(seq.input_embeds is None for seq in seqs):
             input_ids = []
             for seq in seqs:
-                seqlen = len(seq)
-                input_ids.extend(seq[seq.num_cached_tokens:])
+                seq_token_ids = seq.token_ids[:seq.num_cached_tokens] if seq.num_cached_tokens > 0 else seq.token_ids
+                input_ids.extend(seq_token_ids)
             input_ids = torch.tensor(input_ids, dtype=torch.int64).cuda(non_blocking=True)
             input_embeds = self.get_input_embeddings(input_ids)
         else:
             input_embeds = []
             for seq in seqs:
-                seqlen = len(seq)
                 if seq.input_embeds is None:
-                    embeds = self.get_input_embeddings(seq.token_ids[seq.num_cached_tokens:])
+                    seq_token_ids = seq.token_ids[:seq.num_cached_tokens] if seq.num_cached_tokens > 0 else seq.token_ids
+                    seq_embeds = self.get_input_embeddings(seq_token_ids)
                 else:
                     assert len(seq.input_embeds) == len(seq.token_ids)
-                    embeds = seq.input_embeds[seq.num_cached_tokens:]
-                input_embeds.append(embeds)
-            input_embeds = torch.cat(input_embeds, dim=0).cuda(non_blocking=True)
+                    seq_embeds = seq.input_embeds[seq.num_cached_tokens:]
+                input_embeds.append(seq_embeds)
+            input_embeds = torch.cat(input_embeds).cuda(non_blocking=True)
 
         positions = []
         for seq in seqs:
@@ -178,7 +178,7 @@ class ModelRunner:
                 if seq.position_ids is not None:
                     positions.extend(seq.position_ids[seq.num_cached_tokens:])
                 else:
-                    positions.extend(list(range(seq.num_cached_tokens, seqlen)))
+                    positions.extend(list(range(seq.num_cached_tokens, len(seq))))
         if self.uses_mrope:
             positions = torch.cat(positions).cuda(non_blocking=True)
         else:
