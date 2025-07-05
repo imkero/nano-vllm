@@ -1,4 +1,5 @@
 import pickle
+from functools import cached_property
 import torch
 import torch.distributed as dist
 from multiprocessing.synchronize import Event
@@ -47,6 +48,10 @@ class ModelRunner:
                 self.shm = SharedMemory(name="nanovllm")
                 self.loop()
 
+    @cached_property
+    def uses_mrope(self):
+        return getattr(self.model, "uses_mrope", False)
+
     def exit(self):
         if self.world_size > 1:
             self.shm.close()
@@ -93,7 +98,14 @@ class ModelRunner:
         torch.cuda.reset_peak_memory_stats()
         max_num_batched_tokens, max_model_len = self.config.max_num_batched_tokens, self.config.max_model_len
         num_seqs = min(max_num_batched_tokens // max_model_len, self.config.max_num_seqs)
-        seqs = [Sequence([0] * max_model_len) for _ in range(num_seqs)]
+        dummy_ids = [0] * max_model_len
+        sample_embed = self.model.get_input_embeddings(torch.tensor([0]))[0]
+        dummy_embeds = [torch.zeros_like(sample_embed) for _ in range(max_model_len)]
+        if self.uses_mrope:
+            positions = torch.arange(max_model_len, dtype=torch.int64).unsqueeze(0).expand(3, -1)
+        else:
+            positions = torch.arange(max_model_len, dtype=torch.int64)
+        seqs = [Sequence(dummy_ids, input_embeds=dummy_embeds, position_ids=positions) for _ in range(num_seqs)]
         self.run(seqs, True)
         torch.cuda.empty_cache()
 
@@ -123,7 +135,7 @@ class ModelRunner:
         return block_tables
 
     def prepare_prefill(self, seqs: list[Sequence]):
-        input_ids = []
+        input_embeds = []
         positions = []
         cu_seqlens_q = [0]
         cu_seqlens_k = [0]
@@ -133,8 +145,17 @@ class ModelRunner:
         block_tables = None
         for seq in seqs:
             seqlen = len(seq)
-            input_ids.extend(seq[seq.num_cached_tokens:])
-            positions.extend(list(range(seq.num_cached_tokens, seqlen)))
+            if seq.input_embeds is None:
+                embeds = self.get_input_embeddings(seq.token_ids)
+                embeds = embeds[seq.num_cached_tokens:]
+            else:
+                assert len(seq.input_embeds) == len(seq.token_ids)
+                embeds = torch.stack(seq.input_embeds[seq.num_cached_tokens:])
+            input_embeds.append(embeds)
+            if self.uses_mrope:
+                positions.append(seq.position_ids[:, seq.num_cached_tokens:])
+            else:
+                positions.append(seq.position_ids[seq.num_cached_tokens:])
             seqlen_q = seqlen - seq.num_cached_tokens
             seqlen_k = seqlen
             cu_seqlens_q.append(cu_seqlens_q[-1] + seqlen_q)
@@ -152,13 +173,16 @@ class ModelRunner:
                 slot_mapping.extend(list(range(start, end)))
         if cu_seqlens_k[-1] > cu_seqlens_q[-1]:    # prefix cache
             block_tables = self.prepare_block_tables(seqs)
-        input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
-        positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        input_embeds = torch.cat([torch.stack(e) if isinstance(e, list) else e for e in input_embeds], dim=0).cuda(non_blocking=True)
+        if self.uses_mrope:
+            positions = torch.cat([p if torch.is_tensor(p) else torch.tensor(p) for p in positions], dim=1).cuda(non_blocking=True)
+        else:
+            positions = torch.cat([p if torch.is_tensor(p) else torch.tensor(p) for p in positions]).cuda(non_blocking=True)
         cu_seqlens_q = torch.tensor(cu_seqlens_q, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         cu_seqlens_k = torch.tensor(cu_seqlens_k, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         set_context(True, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, slot_mapping, None, block_tables)
-        return input_ids, positions
+        return input_embeds, positions
 
     def prepare_decode(self, seqs: list[Sequence]):
         input_ids = []
@@ -167,16 +191,20 @@ class ModelRunner:
         context_lens = []
         for seq in seqs:
             input_ids.append(seq.last_token)
-            positions.append(len(seq))
+            positions.append(self.model.get_next_position_id(seq.position_ids, len(seq)))
             context_lens.append(len(seq))
             slot_mapping.append(seq.block_table[-1] * self.block_size + seq.last_block_num_tokens  - 1)
         input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
-        positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        input_embeds = self.model.get_input_embeddings(input_ids)
+        if self.uses_mrope:
+            positions = torch.stack(positions, dim=1).cuda(non_blocking=True)
+        else:
+            positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         context_lens = torch.tensor(context_lens, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         block_tables = self.prepare_block_tables(seqs)
         set_context(False, slot_mapping=slot_mapping, context_lens=context_lens, block_tables=block_tables)
-        return input_ids, positions
+        return input_embeds, positions
 
     def prepare_sample(self, seqs: list[Sequence]):
         temperatures = []
@@ -186,31 +214,39 @@ class ModelRunner:
         return temperatures
 
     @torch.inference_mode()
-    def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor, is_prefill: bool):
-        if is_prefill or self.enforce_eager or input_ids.size(0) > 512:
-            return self.model.compute_logits(self.model(input_ids, positions))
+    def run_model(self, input_embeds: torch.Tensor, positions: torch.Tensor, is_prefill: bool):
+        if is_prefill or self.enforce_eager or input_embeds.size(0) > 512:
+            return self.model.compute_logits(self.model(input_embeds, positions))
         else:
-            bs = input_ids.size(0)
+            bs = input_embeds.size(0)
             context = get_context()
             graph = self.graphs[next(x for x in self.graph_bs if x >= bs)]
             graph_vars = self.graph_vars
             for k, v in graph_vars.items():
                 if k != "outputs":
                     v.zero_()
-            graph_vars["input_ids"][:bs] = input_ids
-            graph_vars["positions"][:bs] = positions
+            graph_vars["input_embeds"][:bs] = input_embeds
+            if self.uses_mrope:
+                graph_vars["positions"][:, :bs] = positions
+            else:
+                graph_vars["positions"][:bs] = positions
             graph_vars["slot_mapping"][:bs] = context.slot_mapping
             graph_vars["context_lens"][:bs] = context.context_lens
             graph_vars["block_tables"][:bs, :context.block_tables.size(1)] = context.block_tables
             graph.replay()
             return self.model.compute_logits(graph_vars["outputs"][:bs])
 
-    def run(self, seqs: list[Sequence], is_prefill: bool) -> list[int]:
-        input_ids, positions = self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
+    def run(self, seqs: list[Sequence], is_prefill: bool):
+        input_embeds, positions = (
+            self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
+        )
         temperatures = self.prepare_sample(seqs) if self.rank == 0 else None
-        logits = self.run_model(input_ids, positions, is_prefill)
-        token_ids = self.sampler(logits, temperatures).tolist() if self.rank == 0 else None
+        logits = self.run_model(input_embeds, positions, is_prefill)
+        token_ids = (
+            self.sampler(logits, temperatures).tolist() if self.rank == 0 else None
+        )
         reset_context()
+        # seq.input_embeds and seq.position_ids are unused during decode
         return token_ids
 
     @torch.inference_mode()
@@ -219,8 +255,9 @@ class ModelRunner:
         hf_config = config.hf_config
         max_bs = min(self.config.max_num_seqs, 512)
         max_num_blocks = (config.max_model_len + self.block_size - 1) // self.block_size
-        input_ids = torch.zeros(max_bs, dtype=torch.int64)
-        positions = torch.zeros(max_bs, dtype=torch.int64)
+        input_embeds = torch.zeros(max_bs, hf_config.hidden_size)
+        pos_shape = (3, max_bs) if self.uses_mrope else (max_bs,)
+        positions = torch.zeros(pos_shape, dtype=torch.int64)
         slot_mapping = torch.zeros(max_bs, dtype=torch.int32)
         context_lens = torch.zeros(max_bs, dtype=torch.int32)
         block_tables = torch.zeros(max_bs, max_num_blocks, dtype=torch.int32)
@@ -232,9 +269,10 @@ class ModelRunner:
         for bs in reversed(self.graph_bs):
             graph = torch.cuda.CUDAGraph()
             set_context(False, slot_mapping=slot_mapping[:bs], context_lens=context_lens[:bs], block_tables=block_tables[:bs])
-            outputs[:bs] = self.model(input_ids[:bs], positions[:bs])    # warmup
+            pos_view = positions[:, :bs] if self.uses_mrope else positions[:bs]
+            outputs[:bs] = self.model(input_embeds[:bs], pos_view)    # warmup
             with torch.cuda.graph(graph, self.graph_pool):
-                outputs[:bs] = self.model(input_ids[:bs], positions[:bs])    # capture
+                outputs[:bs] = self.model(input_embeds[:bs], pos_view)    # capture
             if self.graph_pool is None:
                 self.graph_pool = graph.pool()
             self.graphs[bs] = graph
@@ -242,10 +280,23 @@ class ModelRunner:
             reset_context()
 
         self.graph_vars = dict(
-            input_ids=input_ids,
+            input_embeds=input_embeds,
             positions=positions,
             slot_mapping=slot_mapping,
             context_lens=context_lens,
             block_tables=block_tables,
             outputs=outputs,
         )
+
+    def get_input_embeddings(self, input_ids):
+        if not torch.is_tensor(input_ids):
+            input_ids = torch.tensor(input_ids, dtype=torch.int64)
+        input_ids = input_ids.cuda()
+        embeds = self.model.get_input_embeddings(input_ids).cpu()
+        return embeds
+
+    def get_next_position_id(self, position_ids_list, lengths):
+        results = []
+        for pos, l in zip(position_ids_list, lengths):
+            results.append(self.model.get_next_position_id(pos, l))
+        return results

@@ -15,13 +15,19 @@ def main():
     llm = LLM(path, enforce_eager=False, max_model_len=4096)
 
     prompt_token_ids = [[randint(0, 10000) for _ in range(randint(100, max_input_len))] for _ in range(num_seqs)]
+    requests = []
+    for tokens in prompt_token_ids:
+        embeds = llm.model_runner.call("get_input_embeddings", tokens)
+        pos_ids = list(range(len(tokens)))
+        hashes = list(tokens)
+        requests.append(dict(prompt_token_ids=tokens, prompt_embeds=embeds, position_ids=pos_ids, token_hashes=hashes))
     sampling_params = [SamplingParams(temperature=0.6, ignore_eos=True, max_tokens=randint(100, max_ouput_len)) for _ in range(num_seqs)]
     # uncomment the following line for vllm
     # prompt_token_ids = [dict(prompt_token_ids=p) for p in prompt_token_ids]
 
     llm.generate(["Benchmark: "], SamplingParams())
     t = time.time()
-    llm.generate(prompt_token_ids, sampling_params, use_tqdm=False)
+    llm.generate(requests, sampling_params, use_tqdm=False)
     t = (time.time() - t)
     total_tokens = sum(sp.max_tokens for sp in sampling_params)
     throughput = total_tokens / t

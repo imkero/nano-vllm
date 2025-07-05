@@ -1,6 +1,7 @@
 from copy import copy
 from enum import Enum, auto
 from itertools import count
+import torch
 
 from nanovllm.sampling_params import SamplingParams
 
@@ -15,7 +16,14 @@ class Sequence:
     block_size = 256
     counter = count()
 
-    def __init__(self, token_ids: list[int], sampling_params = SamplingParams()):
+    def __init__(
+        self,
+        token_ids: list[int],
+        sampling_params: SamplingParams = SamplingParams(),
+        input_embeds=None,
+        position_ids=None,
+        token_hashes: list[int] | None = None,
+    ):
         self.seq_id = next(Sequence.counter)
         self.status = SequenceStatus.WAITING
         self.token_ids = copy(token_ids)
@@ -27,6 +35,14 @@ class Sequence:
         self.temperature = sampling_params.temperature
         self.max_tokens = sampling_params.max_tokens
         self.ignore_eos = sampling_params.ignore_eos
+        self.input_embeds = None if input_embeds is None else [e.cpu() for e in input_embeds]
+        if position_ids is None:
+            self.position_ids = torch.arange(len(token_ids), dtype=torch.int64)
+        else:
+            if not torch.is_tensor(position_ids):
+                position_ids = torch.tensor(position_ids, dtype=torch.int64)
+            self.position_ids = position_ids.cpu()
+        self.token_hashes = [] if token_hashes is None else list(token_hashes)
 
     def __len__(self):
         return self.num_tokens
@@ -72,12 +88,35 @@ class Sequence:
         self.num_tokens += 1
 
     def __getstate__(self):
-        return (self.num_tokens, self.num_prompt_tokens, self.num_cached_tokens, self.block_table,
-                self.token_ids if self.num_completion_tokens == 0 else self.last_token)
+        return (
+            self.num_tokens,
+            self.num_prompt_tokens,
+            self.num_cached_tokens,
+            self.block_table,
+            self.token_ids if self.num_completion_tokens == 0 else self.last_token,
+            self.input_embeds if self.num_completion_tokens == 0 else None,
+            self.position_ids,
+            self.token_hashes,
+        )
 
     def __setstate__(self, state):
-        self.num_tokens, self.num_prompt_tokens, self.num_cached_tokens, self.block_table = state[:-1]
+        (
+            self.num_tokens,
+            self.num_prompt_tokens,
+            self.num_cached_tokens,
+            self.block_table,
+            token_ids_or_last,
+            input_embeds,
+            position_ids,
+            self.token_hashes,
+        ) = state
         if self.num_completion_tokens == 0:
-            self.token_ids = state[-1]
+            self.token_ids = token_ids_or_last
+            self.input_embeds = input_embeds
+            self.last_token = self.token_ids[-1]
         else:
-            self.last_token = state[-1]
+            self.last_token = token_ids_or_last
+            self.input_embeds = []
+        if not torch.is_tensor(position_ids):
+            position_ids = torch.tensor(position_ids, dtype=torch.int64)
+        self.position_ids = position_ids.cpu()

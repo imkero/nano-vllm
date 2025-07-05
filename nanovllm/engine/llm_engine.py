@@ -39,10 +39,21 @@ class LLMEngine:
         for p in self.ps:
             p.join()
 
-    def add_request(self, prompt: str | list[int], sampling_params: SamplingParams):
-        if isinstance(prompt, str):
-            prompt = self.tokenizer.encode(prompt)
-        seq = Sequence(prompt, sampling_params)
+    def add_request(self, prompt, sampling_params: SamplingParams):
+        if isinstance(prompt, dict):
+            token_ids = prompt["prompt_token_ids"]
+            input_embeds = prompt["prompt_embeds"]
+            position_ids = prompt["position_ids"]
+            token_hashes = prompt.get("token_hashes", [])
+        else:
+            if isinstance(prompt, str):
+                token_ids = self.tokenizer.encode(prompt)
+            else:
+                token_ids = prompt
+            input_embeds = None
+            position_ids = None
+            token_hashes = None
+        seq = Sequence(token_ids, sampling_params, input_embeds, position_ids, token_hashes)
         self.scheduler.add(seq)
 
     def step(self):
