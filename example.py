@@ -25,10 +25,13 @@ def main():
     requests = []
     for prompt in prompts:
         token_ids = tokenizer.encode(prompt)
-        embeds = llm.model_runner.call("get_input_embeddings", token_ids)
-        pos_ids = list(range(len(token_ids)))
-        hashes = list(token_ids)
-        requests.append(dict(prompt_token_ids=token_ids, prompt_embeds=embeds, position_ids=pos_ids, token_hashes=hashes))
+        requests.append(dict(prompt_token_ids=token_ids))
+        
+        # embeds = llm.model_runner.call("get_input_embeddings", token_ids)
+        # pos_ids = list(range(len(token_ids)))
+        # hashes = list(token_ids)
+        # requests.append(dict(prompt_token_ids=token_ids, prompt_embeds=embeds, position_ids=pos_ids, token_hashes=hashes))
+    
     outputs = llm.generate(requests, sampling_params)
 
     for prompt, output in zip(prompts, outputs):

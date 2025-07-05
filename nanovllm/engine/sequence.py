@@ -20,8 +20,8 @@ class Sequence:
         self,
         token_ids: list[int],
         sampling_params: SamplingParams = SamplingParams(),
-        input_embeds=None,
-        position_ids=None,
+        input_embeds: torch.Tensor | None = None,
+        position_ids: torch.Tensor | None = None,
         token_hashes: list[int] | None = None,
     ):
         self.seq_id = next(Sequence.counter)
@@ -35,13 +35,13 @@ class Sequence:
         self.temperature = sampling_params.temperature
         self.max_tokens = sampling_params.max_tokens
         self.ignore_eos = sampling_params.ignore_eos
-        self.input_embeds = None if input_embeds is None else [e.cpu() for e in input_embeds]
+        self.input_embeds = input_embeds
         if position_ids is None:
             self.position_ids = torch.arange(len(token_ids), dtype=torch.int64)
         else:
             if not torch.is_tensor(position_ids):
                 position_ids = torch.tensor(position_ids, dtype=torch.int64)
-            self.position_ids = position_ids.cpu()
+            self.position_ids = position_ids
         self.token_hashes = [] if token_hashes is None else list(token_hashes)
 
     def __len__(self):
@@ -117,6 +117,4 @@ class Sequence:
         else:
             self.last_token = token_ids_or_last
             self.input_embeds = []
-        if not torch.is_tensor(position_ids):
-            position_ids = torch.tensor(position_ids, dtype=torch.int64)
-        self.position_ids = position_ids.cpu()
+        self.position_ids = position_ids

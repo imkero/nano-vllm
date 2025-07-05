@@ -23,7 +23,7 @@ class Qwen3Attention(nn.Module):
         rms_norm_eps: float = 1e-06,
         qkv_bias: bool = False,
         rope_theta: float = 10000,
-        rope_scaling: tuple | None = None,
+        rope_scaling: dict | None = None,
     ) -> None:
         super().__init__()
         tp_size = dist.get_world_size()
@@ -204,15 +204,11 @@ class Qwen3ForCausalLM(nn.Module):
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.model.embed_tokens(input_ids)
 
-    def get_next_position_id(self, position_ids, length: int):
+    def get_next_position_id(self, position_ids, seq_length: int):
         if self.uses_mrope:
-            if torch.is_tensor(position_ids):
-                return position_ids[:, 0] + length
-            return [row[0] + length for row in position_ids]
+            raise NotImplementedError("M-RoPE is not supported in this model.")
         else:
-            if torch.is_tensor(position_ids):
-                return position_ids[0] + length
-            return position_ids[0] + length
+            return seq_length
 
     def forward(
         self,

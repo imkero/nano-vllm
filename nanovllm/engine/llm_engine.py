@@ -41,10 +41,13 @@ class LLMEngine:
 
     def add_request(self, prompt, sampling_params: SamplingParams):
         if isinstance(prompt, dict):
-            token_ids = prompt["prompt_token_ids"]
-            input_embeds = prompt["prompt_embeds"]
-            position_ids = prompt["position_ids"]
-            token_hashes = prompt.get("token_hashes", [])
+            if "prompt" in prompt:
+                token_ids = self.tokenizer.encode(prompt["prompt"])
+            else:
+                token_ids = prompt["prompt_token_ids"]
+            input_embeds = prompt.get("prompt_embeds")
+            position_ids = prompt.get("position_ids")
+            token_hashes = prompt.get("token_hashes")
         else:
             if isinstance(prompt, str):
                 token_ids = self.tokenizer.encode(prompt)
