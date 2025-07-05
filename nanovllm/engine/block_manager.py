@@ -68,6 +68,8 @@ class BlockManager:
                 end = start + self.block_size
                 if len(seq.token_hashes) >= end:
                     h = self.compute_hash(seq.token_hashes[start:end], h)
+                elif len(seq.token_hashes) > start:
+                    h = self.compute_hash(seq.token_hashes[start:] + token_ids[len(seq.token_hashes) - start:], h)
                 else:
                     h = self.compute_hash(token_ids, h)
             else:
@@ -118,6 +120,8 @@ class BlockManager:
             end = start + self.block_size
             if len(seq.token_hashes) >= end:
                 h = self.compute_hash(seq.token_hashes[start:end], prefix)
+            elif len(seq.token_hashes) > start:
+                h = self.compute_hash(seq.token_hashes[start:] + token_ids[len(seq.token_hashes) - start:], prefix)
             else:
                 h = self.compute_hash(token_ids, prefix)
             last_block.update(h, token_ids)
