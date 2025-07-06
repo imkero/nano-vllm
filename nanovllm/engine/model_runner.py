@@ -160,9 +160,9 @@ class ModelRunner:
             for seq in seqs:
                 if seq.input_embeds is None:
                     seq_token_ids = seq.token_ids[:seq.num_cached_tokens] if seq.num_cached_tokens > 0 else seq.token_ids
+                    seq_token_ids = seq_token_ids.cuda(non_blocking=True)
                     seq_embeds = self.get_input_embeddings(seq_token_ids)
                 else:
-                    assert len(seq.input_embeds) == len(seq.token_ids)
                     seq_embeds = seq.input_embeds[seq.num_cached_tokens:]
                 input_embeds.append(seq_embeds)
             input_embeds = torch.cat(input_embeds).cuda(non_blocking=True)
@@ -212,6 +212,8 @@ class ModelRunner:
         slot_mapping = []
         context_lens = []
         for seq in seqs:
+            if seq.num_completion_tokens == 0:
+                raise Exception("Should not do decode on sequence having num_completion_tokens == 0.")
             input_ids.append(seq.last_token)
             positions.append(self.model.get_next_position_id(seq.position_ids, len(seq)))
             context_lens.append(len(seq))

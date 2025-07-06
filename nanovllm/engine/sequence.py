@@ -35,12 +35,17 @@ class Sequence:
         self.temperature = sampling_params.temperature
         self.max_tokens = sampling_params.max_tokens
         self.ignore_eos = sampling_params.ignore_eos
-        self.input_embeds = input_embeds
+        
+        if input_embeds is not None:
+            assert len(input_embeds) == len(token_ids), "Input embeddings must match the number of token IDs."
+            self.input_embeds = input_embeds
+        
         if position_ids is not None:
             if not torch.is_tensor(position_ids):
                 position_ids = torch.tensor(position_ids, dtype=torch.int64, device="cpu")
             self.position_ids = position_ids
-        self.token_hashes = [] if token_hashes is None else list(token_hashes)
+        
+        self.token_hashes: list[int] = [] if token_hashes is None else copy(token_hashes)
 
     def __len__(self):
         return self.num_tokens
@@ -114,5 +119,5 @@ class Sequence:
             self.last_token = self.token_ids[-1]
         else:
             self.last_token = token_ids_or_last
-            self.input_embeds = []
+            self.input_embeds = None
         self.position_ids = position_ids
