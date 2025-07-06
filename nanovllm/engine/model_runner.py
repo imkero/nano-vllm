@@ -35,6 +35,9 @@ class ModelRunner:
         elif model_type == "qwen2":
             from nanovllm.models.qwen2 import Qwen2ForCausalLM
             self.model = Qwen2ForCausalLM(hf_config)
+        elif model_type == "qwen2_vl":
+            from nanovllm.models.qwen2_vl import Qwen2VLForConditionalGeneration
+            self.model = Qwen2VLForConditionalGeneration(hf_config)
         else:
             raise ValueError(f"Unsupported architecture: {model_type}")
         load_model(self.model, config.model)

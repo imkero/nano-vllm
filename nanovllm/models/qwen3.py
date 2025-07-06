@@ -199,16 +199,12 @@ class Qwen3ForCausalLM(nn.Module):
         self.lm_head = ParallelLMHead(config.vocab_size, config.hidden_size)
         if config.tie_word_embeddings:
             self.lm_head.weight.data = self.model.embed_tokens.weight.data
-        self.uses_mrope = False
 
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.model.embed_tokens(input_ids)
 
     def get_next_position_id(self, position_ids, seq_length: int):
-        if self.uses_mrope:
-            raise NotImplementedError("M-RoPE is not supported in this model.")
-        else:
-            return seq_length
+        return seq_length
 
     def forward(
         self,

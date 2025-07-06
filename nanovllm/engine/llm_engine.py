@@ -72,6 +72,9 @@ class LLMEngine:
     def is_finished(self):
         return self.scheduler.is_finished()
 
+    def get_driver_model(self):
+        return self.model_runner.model
+
     def generate(
         self,
         prompts: list[str] | list[list[int]],
