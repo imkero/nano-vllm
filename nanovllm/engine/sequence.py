@@ -38,12 +38,12 @@ class Sequence:
         
         if input_embeds is not None:
             assert len(input_embeds) == len(token_ids), "Input embeddings must match the number of token IDs."
-            self.input_embeds = input_embeds
+        self.input_embeds = input_embeds
         
         if position_ids is not None:
             if not torch.is_tensor(position_ids):
                 position_ids = torch.tensor(position_ids, dtype=torch.int64, device="cpu")
-            self.position_ids = position_ids
+        self.position_ids = position_ids
         
         self.token_hashes: list[int] = [] if token_hashes is None else copy(token_hashes)
 

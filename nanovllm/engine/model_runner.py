@@ -151,7 +151,7 @@ class ModelRunner:
         if all(seq.input_embeds is None for seq in seqs):
             input_ids = []
             for seq in seqs:
-                seq_token_ids = seq.token_ids[:seq.num_cached_tokens] if seq.num_cached_tokens > 0 else seq.token_ids
+                seq_token_ids = seq.token_ids[seq.num_cached_tokens:] if seq.num_cached_tokens > 0 else seq.token_ids
                 input_ids.extend(seq_token_ids)
             input_ids = torch.tensor(input_ids, dtype=torch.int64).cuda(non_blocking=True)
             input_embeds = self.get_input_embeddings(input_ids)
@@ -159,7 +159,7 @@ class ModelRunner:
             input_embeds = []
             for seq in seqs:
                 if seq.input_embeds is None:
-                    seq_token_ids = seq.token_ids[:seq.num_cached_tokens] if seq.num_cached_tokens > 0 else seq.token_ids
+                    seq_token_ids = seq.token_ids[seq.num_cached_tokens:] if seq.num_cached_tokens > 0 else seq.token_ids
                     seq_token_ids = seq_token_ids.cuda(non_blocking=True)
                     seq_embeds = self.get_input_embeddings(seq_token_ids)
                 else:
