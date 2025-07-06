@@ -40,9 +40,13 @@ class Sequence:
             assert len(input_embeds) == len(token_ids), "Input embeddings must match the number of token IDs."
         self.input_embeds = input_embeds
         
+        self.mrope_position_delta = 0
         if position_ids is not None:
             if not torch.is_tensor(position_ids):
                 position_ids = torch.tensor(position_ids, dtype=torch.int64, device="cpu")
+            if position_ids.ndim == 2:
+                self.mrope_position_delta = position_ids[:, -1].max().item() - position_ids.size(1) + 1
+
         self.position_ids = position_ids
         
         self.token_hashes: list[int] = [] if token_hashes is None else copy(token_hashes)
@@ -98,8 +102,9 @@ class Sequence:
             self.block_table,
             self.token_ids if self.num_completion_tokens == 0 else self.last_token,
             self.input_embeds if self.num_completion_tokens == 0 else None,
-            self.position_ids,
             self.token_hashes,
+            self.position_ids if self.num_completion_tokens == 0 else None,
+            self.mrope_position_delta,
         )
 
     def __setstate__(self, state):
@@ -110,8 +115,9 @@ class Sequence:
             self.block_table,
             token_ids_or_last,
             input_embeds,
-            position_ids,
             self.token_hashes,
+            position_ids,
+            mrope_position_delta,
         ) = state
         if self.num_completion_tokens == 0:
             self.token_ids = token_ids_or_last
@@ -121,3 +127,4 @@ class Sequence:
             self.last_token = token_ids_or_last
             self.input_embeds = None
         self.position_ids = position_ids
+        self.mrope_position_delta = mrope_position_delta

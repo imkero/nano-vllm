@@ -203,7 +203,7 @@ class Qwen3ForCausalLM(nn.Module):
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.model.embed_tokens(input_ids)
 
-    def get_next_position_id(self, position_ids, seq_length: int):
+    def get_next_position_id(self, seq_length: int, mrope_position_delta: int):
         return seq_length
 
     def forward(

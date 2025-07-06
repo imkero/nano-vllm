@@ -226,7 +226,7 @@ class ModelRunner:
             if seq.num_completion_tokens == 0:
                 raise Exception("Should not do decode on sequence having num_completion_tokens == 0.")
             input_ids.append(seq.last_token)
-            positions.append(self.model.get_next_position_id(seq.position_ids, len(seq)))
+            positions.append(self.model.get_next_position_id(len(seq), seq.mrope_position_delta))
             context_lens.append(len(seq))
             slot_mapping.append(seq.block_table[-1] * self.block_size + seq.last_block_num_tokens  - 1)
         input_ids = torch.tensor(input_ids, dtype=torch.int64).cuda(non_blocking=True)

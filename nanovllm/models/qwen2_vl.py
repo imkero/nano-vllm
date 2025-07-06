@@ -33,13 +33,8 @@ class Qwen2VLForConditionalGeneration(nn.Module):
     def get_input_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.model.embed_tokens(input_ids)
 
-    def get_next_position_id(self, position_ids, seq_length: int):
+    def get_next_position_id(self, seq_length: int, mrope_position_delta: int):
         if self.uses_mrope:
-            if position_ids is not None:
-                # mrope 计算下一文本 token 位置只需取前一 token 所有维度的最大坐标 + 1
-                mrope_position_delta = position_ids[:, -1].max().item() - len(position_ids) + 1
-            else:
-                mrope_position_delta = 0
             next_pos = mrope_position_delta + seq_length - 1
             return torch.tensor([next_pos], device="cpu", dtype=torch.int64).expand(3, -1)
         else:
