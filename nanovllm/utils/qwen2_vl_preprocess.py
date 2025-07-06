@@ -75,8 +75,8 @@ def _fast_resize(images: np.ndarray, image_processor: Qwen2VLImageProcessor):
         height,
         width,
         factor=image_processor.patch_size * image_processor.merge_size,
-        min_pixels=MIN_PIXELS,
-        max_pixels=MAX_PIXELS,
+        min_pixels=image_processor.min_pixels,
+        max_pixels=image_processor.max_pixels,
     )
     resized_images = np.empty((nframes, resized_height, resized_width, channels), dtype=np.uint8)
     for idx in range(nframes):
