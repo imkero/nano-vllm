@@ -13,7 +13,7 @@ IMAGE_TOKEN_ID = 151655
 
 
 def main():
-    path = os.path.expanduser("~/huggingface/Qwen2-VL-7B-Instruct/")
+    path = os.path.expanduser("~/model/Qwen2-VL-2B-Instruct/")
 
     tokenizer = AutoTokenizer.from_pretrained(path, use_fast=True)
     processor = AutoProcessor.from_pretrained(path)
@@ -30,7 +30,7 @@ def main():
     pixel_values = processed["pixel_values"]
     image_grid_thw = processed["image_grid_thw"]
 
-    config = llm.model_runner.config
+    config = llm.model_runner.config.hf_config
     model = llm.model_runner.model
     with torch.inference_mode():
         image_embeds = model.visual(pixel_values.cuda(), image_grid_thw.cuda())
@@ -57,12 +57,11 @@ def main():
         else:
             prompt_token_ids.append(token)
 
-    prompt_token_ids = torch.tensor(prompt_token_ids, dtype=torch.int64)
-    prompt_embeds = model.get_input_embeddings(prompt_token_ids.cuda())
-    prompt_embeds[prompt_token_ids == IMAGE_TOKEN_ID] = image_embeds
-
+    prompt_token_ids_tensor = torch.tensor(prompt_token_ids, dtype=torch.int64)
+    prompt_embeds = model.get_input_embeddings(prompt_token_ids_tensor.cuda())
+    prompt_embeds[prompt_token_ids_tensor == IMAGE_TOKEN_ID] = image_embeds
     position_ids, _ = mrope_get_input_positions_and_delta(
-        prompt_token_ids, config, image_grid_thw=image_grid_thw, video_grid_thw=None, second_per_grid_ts=None
+        prompt_token_ids_tensor, config, image_grid_thw=image_grid_thw, video_grid_thw=None, second_per_grid_ts=None
     )
 
     request = dict(prompt_token_ids=prompt_token_ids, prompt_embeds=prompt_embeds, position_ids=position_ids)
