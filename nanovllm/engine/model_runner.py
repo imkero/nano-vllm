@@ -110,7 +110,7 @@ class ModelRunner:
         num_seqs = min(max_num_batched_tokens // max_model_len, self.config.max_num_seqs)
         dummy_ids = [0] * max_model_len
         if self.uses_mrope:
-            positions = torch.arange(max_model_len, device="cpu", dtype=torch.int64).unsqueeze(0).expand(3, -1)
+            positions = torch.arange(max_model_len, device="cpu", dtype=torch.int64).expand(3, -1)
         else:
             positions = torch.arange(max_model_len, device="cpu", dtype=torch.int64)
         seqs = [Sequence(dummy_ids, position_ids=positions) for _ in range(num_seqs)]
@@ -173,7 +173,7 @@ class ModelRunner:
                 else:
                     seq_embeds = seq.input_embeds[seq.num_cached_tokens:]
                 input_embeds.append(seq_embeds)
-            input_embeds = torch.cat(input_embeds).cuda(non_blocking=True)
+            input_embeds = torch.cat(input_embeds, dim=1).cuda(non_blocking=True)
 
         positions = []
         for seq in seqs:
@@ -181,13 +181,16 @@ class ModelRunner:
                 if seq.position_ids is not None:
                     positions.append(seq.position_ids[:, seq.num_cached_tokens:])
                 else:
-                    positions.append(torch.arange(seq.num_cached_tokens, len(seq), dtype=torch.int64, device="cpu").unsqueeze(0).expand(3, -1))
+                    positions.append(torch.arange(seq.num_cached_tokens, len(seq), dtype=torch.int64, device="cpu").expand(3, -1))
             else:
                 if seq.position_ids is not None:
                     positions.append(seq.position_ids[seq.num_cached_tokens:])
                 else:
                     positions.append(torch.arange(seq.num_cached_tokens, len(seq), dtype=torch.int64, device="cpu"))
-        positions = torch.cat(positions).cuda(non_blocking=True)
+        if self.uses_mrope:
+            positions = torch.cat(positions, dim=1).cuda(non_blocking=True)
+        else:
+            positions = torch.cat(positions).cuda(non_blocking=True)
 
         for seq in seqs:
             seqlen = len(seq)
@@ -229,7 +232,7 @@ class ModelRunner:
         input_ids = torch.tensor(input_ids, dtype=torch.int64).cuda(non_blocking=True)
         input_embeds = self.model.get_input_embeddings(input_ids)
         if self.uses_mrope:
-            positions = torch.stack(positions).cuda(non_blocking=True)
+            positions = torch.cat(positions, dim=1).cuda(non_blocking=True)
         else:
             positions = torch.tensor(positions, dtype=torch.int64).cuda(non_blocking=True)
         slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32).cuda(non_blocking=True)
