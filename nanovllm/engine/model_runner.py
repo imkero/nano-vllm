@@ -122,7 +122,11 @@ class ModelRunner:
         peak = torch.cuda.memory_stats()["allocated_bytes.all.peak"]
         current = torch.cuda.memory_stats()["allocated_bytes.all.current"]
         num_kv_heads = hf_config.num_key_value_heads // self.world_size
-        head_dim = hf_config.get("head_dim", hf_config.hidden_size // hf_config.num_attention_heads)
+        
+        head_dim = getattr(hf_config, "head_dim")
+        if not head_dim:
+            head_dim = hf_config.hidden_size // hf_config.num_attention_heads)
+        
         block_bytes = 2 * hf_config.num_hidden_layers * self.block_size * num_kv_heads * head_dim * hf_config.torch_dtype.itemsize
         config.num_kvcache_blocks = int(total * config.gpu_memory_utilization - used - peak + current) // block_bytes
         assert config.num_kvcache_blocks > 0
