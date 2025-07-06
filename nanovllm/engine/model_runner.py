@@ -123,7 +123,7 @@ class ModelRunner:
         current = torch.cuda.memory_stats()["allocated_bytes.all.current"]
         num_kv_heads = hf_config.num_key_value_heads // self.world_size
         
-        head_dim = getattr(hf_config, "head_dim")
+        head_dim = getattr(hf_config, "head_dim", None)
         if not head_dim:
             head_dim = hf_config.hidden_size // hf_config.num_attention_heads
         
