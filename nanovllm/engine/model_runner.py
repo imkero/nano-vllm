@@ -125,7 +125,7 @@ class ModelRunner:
         
         head_dim = getattr(hf_config, "head_dim")
         if not head_dim:
-            head_dim = hf_config.hidden_size // hf_config.num_attention_heads)
+            head_dim = hf_config.hidden_size // hf_config.num_attention_heads
         
         block_bytes = 2 * hf_config.num_hidden_layers * self.block_size * num_kv_heads * head_dim * hf_config.torch_dtype.itemsize
         config.num_kvcache_blocks = int(total * config.gpu_memory_utilization - used - peak + current) // block_bytes
