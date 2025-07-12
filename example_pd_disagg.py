@@ -11,6 +11,8 @@ import torch
 from nanovllm import LLM, SamplingParams
 from nanovllm.engine.sequence import Sequence, SequenceStatus
 
+model_path = os.path.expanduser("~/model/Qwen3-0.6B/")
+
 def prefill_worker(prompts: list[dict], llm: LLM):
     """Run prefill on the source worker and return shared KV cache."""
     seqs = []
@@ -82,7 +84,7 @@ def decode_worker(
     dst_block_ids = [None] * len(block_hashes)
 
     for seq_info in seq_infos:
-        sampling_params = SamplingParams(max_tokens=16)
+        sampling_params = SamplingParams(max_tokens=16, temperature=0)
 
         seq = Sequence(token_ids=seq_info["token_ids"],
                        sampling_params=sampling_params,
@@ -117,25 +119,47 @@ def decode_worker(
 
     return [llm.tokenizer.decode(outputs[s.seq_id]) for s in seqs]
 
-
-def main():
-    model_path = os.path.expanduser("~/huggingface/Qwen3-0.6B/")
-
-    llm_prefill = LLM(model_path, enforce_eager=True, tensor_parallel_size=1)
-    llm_decode = LLM(model_path, enforce_eager=True, tensor_parallel_size=1)
+def prefill_process():
+    print("loading model")
+    llm_prefill = LLM(model_path, enforce_eager=True, tensor_parallel_size=1, gpu_memory_utilization=0.4, num_kvcache_blocks=100)
+    print("model loaded")
 
     tokenizer = llm_prefill.tokenizer
     prompts = [
-        dict(prompt_token_ids=tokenizer.encode("Hello, how are you?")),
-        dict(prompt_token_ids=tokenizer.encode("Hello Hello Hello Hello Hello Hello Hello Hello. Hello, how is the weather today?")),
+        dict(prompt_token_ids=tokenizer.encode("<|im_start|>user\n" + "\n " * 600 + "Hello, what date is it today?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n")),
+        dict(prompt_token_ids=tokenizer.encode("<|im_start|>user\nTranslate them into Chinese: \nAn apple a day keeps the doctor away." + " Hello." * 200 + "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n")),
     ]
 
-    seq_infos, dense_kv_cache, hash_to_idx = prefill_worker(
+    print("prefilling")
+    seq_infos, intermediate_kv_cache, block_hashes = prefill_worker(
         prompts, llm_prefill)
-    outputs = decode_worker(seq_infos, dense_kv_cache, hash_to_idx, llm_decode)
+    print("seqs", seq_infos)
+    print("kv_caches", intermediate_kv_cache.shape)
+    print("block_hashes", block_hashes)
+    
+    return seq_infos, intermediate_kv_cache, block_hashes
+
+def decode_process(seq_infos, intermediate_kv_cache, block_hashes):
+    print("loading model")
+    llm_decode = LLM(model_path, enforce_eager=True, tensor_parallel_size=1, gpu_memory_utilization=0.4, num_kvcache_blocks=100)
+    print("model loaded")
+    
+    print("---")
+    print("decoding")
+    outputs = decode_worker(seq_infos, intermediate_kv_cache, block_hashes, llm_decode)
     for out in outputs:
         print("Generated:", out)
 
+import multiprocessing as mp
+def main():
+    mp.set_start_method('spawn', force=True)
+
+    seq_infos, intermediate_kv_cache, block_hashes = prefill_process()
+
+    print("starting decode process")
+    p = mp.Process(target=decode_process, 
+                   args=(seq_infos, intermediate_kv_cache, block_hashes))
+    p.start()
 
 if __name__ == "__main__":
     main()
