@@ -49,8 +49,8 @@ class NixlConnector:
     def register_kv_caches(self, kv_cache: torch.Tensor):
         """Register a *contiguous* KV-cache tensor with NIXL for sharing."""
         # The tensor layout depends on your attention implementation; here we
-        # assume (num_blocks, block_size, num_heads, head_dim).
-        num_blocks, block_size, num_heads, head_dim = kv_cache.shape
+        # assume (k_and_v, num_layers, num_blocks, block_size, num_heads, head_dim).
+        k_and_v, num_layers, num_blocks, block_size, num_heads, head_dim = kv_cache.shape
         element_size = kv_cache.element_size()
         print("tensor shape", kv_cache.shape, flush=True)
 
@@ -58,18 +58,20 @@ class NixlConnector:
         self.num_blocks = num_blocks
 
         base_addr = kv_cache.data_ptr()
-        region_len = num_blocks * self.block_len
-        caches_data = [(base_addr, region_len, self.rank, "")]
 
-        # 1️⃣ Register the contiguous region covering the whole tensor
-        descs = self.nixl_wrapper.get_reg_descs(caches_data, "VRAM")
-        self.nixl_wrapper.register_memory(descs)
+        # Calculate the stride for each layer
+        layer_stride = num_blocks * self.block_len
+        kv_stride = num_layers * layer_stride
 
-        # 2️⃣ Build block-level descriptors for later transfers
-        blocks_data = [
-            (base_addr + block_id * self.block_len, self.block_len, self.rank)
-            for block_id in range(num_blocks)
-        ]
+        blocks_data = []
+        for kv_idx in range(k_and_v):
+            for layer_idx in range(num_layers):
+                for block_id in range(num_blocks):
+                    offset = kv_idx * kv_stride + layer_idx * layer_stride + block_id * self.block_len
+                    blocks_data.append(
+                        (base_addr + offset, self.block_len, self.rank)
+                    )
+
         self.local_blocks_descs = self.nixl_wrapper.get_xfer_descs(
             blocks_data, "VRAM"
         )
@@ -106,14 +108,27 @@ class NixlConnector:
         self,
         local_block_ids: List[int],
         remote_block_ids: List[int],
+        num_layers: int,
         notify_msg: str = "kv_transfer",
     ):
+
+        flat_local_block_ids = []
+        flat_remote_block_ids = []
+
+        # k_and_v is 2
+        for i in range(2 * num_layers):
+            layer_offset = i * self.num_blocks
+            for block_id in local_block_ids:
+                flat_local_block_ids.append(layer_offset + block_id)
+            for block_id in remote_block_ids:
+                flat_remote_block_ids.append(layer_offset + block_id)
+
         handle = self.nixl_wrapper.make_prepped_xfer(
             "WRITE",
             self.local_xfer_side_handle,
-            local_block_ids,
+            flat_local_block_ids,
             self.remote_xfer_side_handle,
-            remote_block_ids,
+            flat_remote_block_ids,
             notify_msg,
         )
         status = self.nixl_wrapper.transfer(handle)
@@ -166,21 +181,18 @@ def prefill_worker(prompts: list[dict], llm: LLM):
 
             intermediate_block_table.append(s2i_block_id_map[src_block_id])
 
-    src_block_ids_tensor = torch.tensor(
-        src_block_ids,
-        dtype=torch.long,
-    )
-
     for seq in seqs:
         llm.scheduler.block_manager.deallocate(seq)
 
-    return seq_infos, src_block_ids, block_hashes
+    num_layers = llm.model_runner.config.hf_config.num_hidden_layers
+    return seq_infos, src_block_ids, block_hashes, num_layers
 
 
 def decode_worker(
     seq_infos: list[dict],
     block_hashes: list[int],
     llm: LLM,
+    allocate_only: bool = False,
 ):
     """Receive KV cache blocks from the prefill worker and continue decoding."""
 
@@ -202,11 +214,18 @@ def decode_worker(
         for idx, intermediate_block_id in enumerate(seq_info["intermediate_block_table"]):
             dst_block_ids[intermediate_block_id] = seq.block_table[idx]
 
+        if allocate_only:
+            # Don't start decoding yet, just return the allocated block ids.
+            # The caller will deallocate the sequence.
+            continue
+
         seq.append_token(seq_info["next_token_id"])
         seq.status = SequenceStatus.RUNNING
         llm.scheduler.running.append(seq)
         seqs.append(seq)
 
+    if allocate_only:
+        return dst_block_ids, seqs
 
     outputs: dict[int, list[int]] = {}
     while any(not s.is_finished for s in seqs):
@@ -283,18 +302,21 @@ def prefill_process(pipe):
     prompts = [dict(prompt_token_ids=prompt_token_ids, prompt_embeds=prompt_embeds, position_ids=position_ids)]
 
     print("prefilling")
-    seq_infos, src_block_ids, block_hashes = prefill_worker(
+    seq_infos, src_block_ids, block_hashes, num_layers = prefill_worker(
         prompts, llm_prefill)
 
+    pipe.send(seq_infos)
+    pipe.send(block_hashes)
+    pipe.send(num_layers)
+
+    dst_block_ids = pipe.recv()
+
     # Transfer blocks 1-to-1 (local→remote)
-    remote_ids = list(range(len(src_block_ids)))
-    status = connector.write_blocks(src_block_ids, remote_ids)
+    status = connector.write_blocks(src_block_ids, dst_block_ids, num_layers)
     print(f"[prefill] Transfer completed with status {status}", flush=True)
 
     # Notify decode worker & send reference data for verification
     pipe.send("kv_transfer_done")
-    pipe.send(seq_infos)
-    pipe.send(block_hashes)
 
     print("seqs", seq_infos)
     print("block_hashes", block_hashes)
@@ -317,19 +339,55 @@ def decode_process(pipe):
     pipe.send_bytes(metadata)
     pipe.send_bytes(block_descs)
 
+    seq_infos = pipe.recv()
+    block_hashes = pipe.recv()
+    num_layers = pipe.recv()
+
+    dst_block_ids, seqs_to_deallocate = decode_worker(seq_infos, block_hashes, llm_decode, allocate_only=True)
+    pipe.send(dst_block_ids)
+
+    # Deallocate the sequences used for allocation
+    for seq in seqs_to_deallocate:
+        llm_decode.scheduler.block_manager.deallocate(seq)
+
     print("[decode] Waiting for KV-cache transfer …", flush=True)
 
     # Blocking wait for the prefill worker to say we're done
     done_flag = pipe.recv()  # should be a simple string
     assert done_flag == "kv_transfer_done"
 
-    seq_infos = pipe.recv()
-    block_hashes = pipe.recv()
-
     print("---")
     print("decoding")
-    outputs = decode_worker(seq_infos, block_hashes, llm_decode)
-    for out in outputs:
+    # At this point, the KV cache is already transferred, so we need to manually
+    # create the sequences and start decoding.
+
+    seqs: list[Sequence] = []
+    for seq_info in seq_infos:
+        sampling_params = SamplingParams(max_tokens=16, temperature=0)
+
+        seq = Sequence(token_ids=seq_info["token_ids"],
+                       sampling_params=sampling_params,
+                       input_embeds=None,
+                       position_ids=seq_info["position_ids"],
+                       token_hashes=seq_info["token_hashes"],
+                       )
+
+        # Manually set the block table, as we are not calling allocate
+        seq.block_table = [dst_block_ids[intermediate_id] for intermediate_id in seq_info["intermediate_block_table"]]
+
+        seq.append_token(seq_info["next_token_id"])
+        seq.status = SequenceStatus.RUNNING
+        llm_decode.scheduler.running.append(seq)
+        seqs.append(seq)
+
+    outputs: dict[int, list[int]] = {}
+    while any(not s.is_finished for s in seqs):
+        out, _ = llm_decode.step()
+        for seq_id, token_ids in out:
+            outputs[seq_id] = token_ids
+
+    results = [llm_decode.tokenizer.decode(outputs[s.seq_id]) for s in seqs]
+    for out in results:
         print("Generated:", out)
 
 
