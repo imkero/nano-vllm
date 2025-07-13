@@ -18,7 +18,7 @@ def prefill_worker(prompts: list[dict], llm: LLM):
     seqs = []
     next_token_id_map: dict[int, int] = {}
 
-    sampling_params = SamplingParams(max_tokens=1)
+    sampling_params = SamplingParams(temperature=0, max_tokens=1)
     for prompt in prompts:
         seq = llm.add_request(prompt, sampling_params)
         seqs.append(seq)
